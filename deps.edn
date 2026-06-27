@@ -1,0 +1,9 @@
+;; eth-crypto-clj — standalone, dependency-free Ethereum crypto for Clojure/babashka.
+;; Keccak-256 + EIP-55 + EIP-712 typed-data + secp256k1 ecrecover, pure clojure.*
+;; (java.math.BigInteger only). Verified against the canonical EIP-712 'Ether Mail'
+;; spec vector. Lift-ready for extraction into com-junkawasaki/eth-crypto-clj.
+{:paths ["src"]
+ :deps {}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :main-opts ["-m" "cognitect.test-runner"]}}}

@@ -1,0 +1,72 @@
+# eth-crypto-clj
+
+Standalone, **dependency-free** Ethereum crypto primitives for Clojure — runs
+unchanged under **babashka** and the JVM (only `clojure.*` + `java.math.BigInteger`).
+
+Sibling of [`ed25519-clj`](https://github.com/com-junkawasaki/ed25519-clj) /
+[`cacao-clj`](https://github.com/com-junkawasaki/cacao-clj): where those cover the
+did:key / Ed25519 / CACAO side, this covers the **Ethereum secp256k1 / Keccak-256 /
+EIP-712** side that the org otherwise lacked in Clojure.
+
+## Why pure Clojure (not BouncyCastle)
+
+babashka is a GraalVM *native image*: it can only use Java classes baked into the bb
+binary. Arbitrary jars on the classpath are **not** loadable at runtime
+(`java.security` exposes SHA3-256 but **not** Keccak-256, and any `org.bouncycastle.*`
+import throws `ClassNotFoundException`). So Keccak-256 is the Keccak-f[1600] permutation
+implemented here, and secp256k1 ecrecover uses `java.math.BigInteger` (which IS available
+in bb). The result runs identically on bb and the JVM with zero native dependencies.
+
+## API (`eth-crypto.core`)
+
+| fn | in → out |
+|---|---|
+| `keccak256` | bytes → 32 bytes (Keccak-256, **not** SHA3-256) |
+| `eip55-checksum` | 20-byte addr / hex → EIP-55 mixed-case `0x…` string |
+| `encode-type` / `type-hash` | EIP-712 type encoding + `keccak256` thereof |
+| `encode-data` / `hash-struct` | EIP-712 struct encoding + hash |
+| `domain-separator` | EIP-712 domain separator |
+| `eip712-digest` | `(domain types primary message) →` the `keccak256(0x1901‖domainSep‖structHash)` digest |
+| `ecrecover` | `(digest sig)` → 20-byte signer address (secp256k1 public-key recovery) |
+| `ecrecover-checksum` | as above → EIP-55 checksummed `0x…` |
+| `hex->bytes` / `bytes->hex` / `strip0x` / `utf8` | byte/hex helpers |
+
+## Verification
+
+Verified against the canonical **EIP-712 "Ether Mail" spec vector**
+(eips.ethereum.org/EIPS/eip-712):
+
+```clojure
+;; digest of the spec Mail message
+(= (bytes->hex (eip712-digest domain types "Mail" message))
+   "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2")  ;=> true
+;; recover the spec signature → the spec signer
+(= (ecrecover-checksum digest spec-signature)
+   "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826")                        ;=> true
+```
+
+plus Keccak-256 and EIP-55 known-answer vectors.
+
+## Usage
+
+```clojure
+;; deps.edn / bb.edn
+io.github.com-junkawasaki/eth-crypto-clj {:git/sha "<sha>"}
+
+;; code
+(require '[eth-crypto.core :as eth])
+(eth/eip712-digest domain types "CreditorConsent" message)
+(eth/ecrecover-checksum digest signature)   ;=> "0x…"
+```
+
+## Test
+
+```bash
+bb --classpath src:test -e "(require 'eth-crypto.test-eth-crypto)(clojure.test/run-tests 'eth-crypto.test-eth-crypto)"
+# Ran 5 tests containing 7 assertions. 0 failures, 0 errors.
+```
+
+## License
+
+Apache-2.0. First-party org library; the etzhayyim Charter Compliance Rider applies to
+first-party consumers per their own NOTICE.
