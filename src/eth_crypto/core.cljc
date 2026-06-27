@@ -21,7 +21,12 @@
     hash-struct        types primary data -> 32-byte hashStruct
     domain-separator   domain-map -> 32-byte EIP712Domain hashStruct
     eip712-digest      domain types primary message -> 32-byte signing digest
-    ecrecover          32-byte digest + 65-byte sig{r,s,v} -> 20-byte address"
+    ecrecover          32-byte digest + 65-byte sig{r,s,v} -> 20-byte address
+    private->public    32-byte privkey -> 64-byte uncompressed pubkey (no 0x04)
+    address-of-privkey 32-byte privkey -> EIP-55 0x… address
+    secp256k1-sign     privkey + digest -> {:r :s :recovery-id} (RFC 6979, low-s)
+    rlp-encode         byte-string / nested list -> canonical Ethereum RLP bytes
+    sign-tx-legacy     tx + privkey -> 0x… raw signed EIP-155 legacy transaction"
   (:require [clojure.string :as str]))
 
 ;; ─── hex / byte helpers ──────────────────────────────────────────────
@@ -325,3 +330,158 @@
   "ecrecover then EIP-55 checksum the recovered address."
   ^String [^bytes digest ^bytes sig]
   (eip55-checksum (ecrecover digest sig)))
+
+;; ─── public key / address from private key ───────────────────────────
+
+(defn private->public
+  "secp256k1 public key from a 32-byte private key. Returns the 64-byte
+  uncompressed point X‖Y (WITHOUT the 0x04 prefix), i.e. keccak256 of this is
+  the address preimage."
+  ^bytes [^bytes privkey]
+  (let [d (BigInteger. 1 privkey)
+        [qx qy] (pt-mul d G)
+        pub (byte-array 64)]
+    (System/arraycopy (uint->32 qx) 0 pub 0 32)
+    (System/arraycopy (uint->32 qy) 0 pub 32 32)
+    pub))
+
+(defn address-of-privkey
+  "EIP-55 checksummed 0x… address controlled by a 32-byte private key:
+  last 20 bytes of keccak256(uncompressed-pubkey-without-04-prefix)."
+  ^String [^bytes privkey]
+  (eip55-checksum
+   (java.util.Arrays/copyOfRange (keccak256 (private->public privkey)) 12 32)))
+
+;; ─── deterministic ECDSA signing (RFC 6979 + EIP-2 low-s) ────────────
+
+(defn- ^bytes hmac-sha256 [^bytes key ^bytes data]
+  (let [mac (javax.crypto.Mac/getInstance "HmacSHA256")]
+    (.init mac (javax.crypto.spec.SecretKeySpec. key "HmacSHA256"))
+    (.doFinal mac data)))
+
+(def ^:private ^BigInteger SECP-N-HALF (.shiftRight SECP-N 1))
+
+(defn secp256k1-sign
+  "Deterministic ECDSA signature over secp256k1 of a 32-byte `digest` with a
+  32-byte `privkey`, using an RFC 6979 (HMAC-SHA256) nonce and EIP-2 low-s
+  normalization (s ≤ n/2). Returns {:r BigInteger :s BigInteger :recovery-id 0|1}.
+  Pure java.math.BigInteger + javax.crypto HMAC (both available in babashka)."
+  [^bytes privkey ^bytes digest]
+  (let [n SECP-N
+        z (BigInteger. 1 digest)               ; bits2int(h1), 256-bit
+        d (BigInteger. 1 privkey)
+        hsize 32
+        x-oct (uint->32 d)                     ; int2octets(x)
+        h-oct (uint->32 (.mod z n))            ; bits2octets(h1)
+        b00 (byte-array 1)                     ; single 0x00
+        b01 (byte-array [(unchecked-byte 1)])  ; single 0x01
+        ;; RFC 6979 3.2 steps b–g
+        V0 (byte-array hsize (unchecked-byte 1))
+        K0 (byte-array hsize (unchecked-byte 0))
+        K1 (hmac-sha256 K0 (concat-bytes [V0 b00 x-oct h-oct]))
+        V1 (hmac-sha256 K1 V0)
+        K2 (hmac-sha256 K1 (concat-bytes [V1 b01 x-oct h-oct]))
+        V2 (hmac-sha256 K2 V1)]
+    ;; step h: HMAC-SHA256 output is 32 bytes = qlen/8, so one block == T
+    (loop [K K2 V V2]
+      (let [T (hmac-sha256 K V)
+            k (BigInteger. 1 T)
+            result
+            (when (and (>= (.signum k) 1) (< (.compareTo k n) 0))
+              (let [[rx ry] (pt-mul k G)
+                    r (.mod rx n)]
+                (when-not (= r BigInteger/ZERO)
+                  (let [s (.mod (.multiply (.modInverse k n)
+                                           (.add z (.multiply r d))) n)]
+                    (when-not (= s BigInteger/ZERO)
+                      (let [rec (bit-or (if (.testBit ^BigInteger ry 0) 1 0)
+                                        (if (>= (.compareTo rx n) 0) 2 0))]
+                        (if (> (.compareTo s SECP-N-HALF) 0)
+                          {:r r :s (.subtract n s) :recovery-id (bit-xor rec 1)}
+                          {:r r :s s :recovery-id rec})))))))]
+        (or result
+            (let [K' (hmac-sha256 K (concat-bytes [T b00]))
+                  V' (hmac-sha256 K' T)]
+              (recur K' V')))))))
+
+;; ─── RLP encoding (canonical Ethereum) ───────────────────────────────
+
+(defn- ^bytes uint->minimal
+  "Minimal big-endian byte-string of a non-negative integer (0 → empty)."
+  [v]
+  (let [bi (biginteger v)]
+    (if (= bi BigInteger/ZERO)
+      (byte-array 0)
+      (let [^bytes b (.toByteArray bi)]
+        (if (and (> (alength b) 1) (zero? (aget b 0)))
+          (java.util.Arrays/copyOfRange b 1 (alength b))   ; strip sign byte
+          b)))))
+
+(defn- ^bytes rlp-prefix
+  "RLP length prefix. `offset` is 0x80 (byte-string) or 0xc0 (list)."
+  [^long offset ^long len]
+  (if (< len 56)
+    (byte-array [(unchecked-byte (+ offset len))])
+    (let [len-bytes (uint->minimal len)]
+      (concat-bytes [(byte-array [(unchecked-byte (+ offset 55 (alength len-bytes)))])
+                     len-bytes]))))
+
+(defn rlp-encode
+  "Canonical recursive RLP. `item` is a byte-array (byte-string) or a sequential
+  collection of items (list). Returns the RLP bytes."
+  ^bytes [item]
+  (if (sequential? item)
+    (let [payload (concat-bytes (map rlp-encode item))]
+      (concat-bytes [(rlp-prefix 0xc0 (alength payload)) payload]))
+    (let [^bytes b item
+          n (alength b)]
+      (if (and (= n 1) (< (bit-and (aget b 0) 0xff) 0x80))
+        b                                              ; single byte < 0x80 → itself
+        (concat-bytes [(rlp-prefix 0x80 n) b])))))
+
+;; ─── EIP-155 legacy transaction signing ──────────────────────────────
+
+(defn- ^bytes ->num-bytes
+  "Coerce an int / 0x-hex string / bytes numeric field to its minimal RLP
+  big-endian byte-string."
+  [v]
+  (uint->minimal
+   (cond
+     (nil? v)     BigInteger/ZERO
+     (number? v)  (biginteger v)
+     (string? v)  (let [s (strip0x v)] (if (empty? s) BigInteger/ZERO (BigInteger. s 16)))
+     :else        (BigInteger. 1 ^bytes v))))
+
+(defn- ^bytes ->byte-str
+  "Coerce a 0x-hex string / bytes / nil opaque field (address, data) to bytes."
+  [v]
+  (cond
+    (nil? v)    (byte-array 0)
+    (string? v) (hex->bytes v)
+    :else       v))
+
+(defn sign-tx-legacy
+  "Sign an EIP-155 legacy transaction. `tx` is a map with keys
+  :nonce :gas-price :gas :to :value :data :chain-id (each an int, 0x-hex string,
+  or bytes; :to/:data are opaque byte-strings, the rest are numbers). Returns the
+  0x… RLP-encoded raw signed transaction hex ready for eth_sendRawTransaction."
+  ^String [tx ^bytes privkey]
+  (let [{:keys [nonce gas-price gas to value data chain-id]} tx
+        nonce-b (->num-bytes nonce)
+        gp-b    (->num-bytes gas-price)
+        gas-b   (->num-bytes gas)
+        to-b    (->byte-str to)
+        value-b (->num-bytes value)
+        data-b  (->byte-str data)
+        chain-b (->num-bytes chain-id)
+        empty-b (byte-array 0)
+        sighash (keccak256
+                 (rlp-encode [nonce-b gp-b gas-b to-b value-b data-b chain-b empty-b empty-b]))
+        {:keys [r s recovery-id]} (secp256k1-sign privkey sighash)
+        cid (BigInteger. 1 (let [b chain-b] (if (zero? (alength b)) (byte-array 1) b)))
+        v (.add (.add (BigInteger/valueOf recovery-id)
+                      (.multiply (BigInteger/valueOf 2) cid))
+                (BigInteger/valueOf 35))
+        raw (rlp-encode [nonce-b gp-b gas-b to-b value-b data-b
+                         (->num-bytes v) (->num-bytes r) (->num-bytes s)])]
+    (str "0x" (bytes->hex raw))))

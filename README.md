@@ -29,6 +29,11 @@ in bb). The result runs identically on bb and the JVM with zero native dependenc
 | `eip712-digest` | `(domain types primary message) →` the `keccak256(0x1901‖domainSep‖structHash)` digest |
 | `ecrecover` | `(digest sig)` → 20-byte signer address (secp256k1 public-key recovery) |
 | `ecrecover-checksum` | as above → EIP-55 checksummed `0x…` |
+| `private->public` | 32-byte privkey → 64-byte uncompressed pubkey (`X‖Y`, no `0x04`) |
+| `address-of-privkey` | 32-byte privkey → EIP-55 `0x…` address |
+| `secp256k1-sign` | `(privkey digest)` → `{:r :s :recovery-id}` — deterministic ECDSA (**RFC 6979** HMAC-SHA256 nonce) with EIP-2 low-s |
+| `rlp-encode` | byte-string / nested list → canonical Ethereum **RLP** bytes |
+| `sign-tx-legacy` | `(tx privkey)` → `0x…` raw signed **EIP-155** legacy tx (replaces python `eth_account`) |
 | `hex->bytes` / `bytes->hex` / `strip0x` / `utf8` | byte/hex helpers |
 
 ## Verification
@@ -46,6 +51,16 @@ Verified against the canonical **EIP-712 "Ether Mail" spec vector**
 ```
 
 plus Keccak-256 and EIP-55 known-answer vectors.
+
+The **signing** side is gated against the canonical **EIP-155 worked example**
+(privkey `0x4646…46`, the EIP-155 spec tx) — the signing hash, `v=37`/`r`/`s`, and
+the full raw signed tx all match byte-for-byte, plus a sign→`ecrecover` roundtrip and
+an `address-of-privkey` vector — see `test/eth_crypto/test_signing.cljc`:
+
+```bash
+bb --classpath src:test -e "(require 'eth-crypto.test-signing)(clojure.test/run-tests 'eth-crypto.test-signing)"
+# Ran 5 tests containing 7 assertions. 0 failures, 0 errors.
+```
 
 ## Usage
 
