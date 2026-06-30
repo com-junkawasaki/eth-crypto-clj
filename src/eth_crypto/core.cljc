@@ -34,7 +34,7 @@
 (defn strip0x ^String [^String s]
   (if (str/starts-with? s "0x") (subs s 2) s))
 
-(defn hex->bytes ^bytes [s]
+(defn hex->bytes ^"[B" [s]
   (let [s (strip0x s)
         n (quot (count s) 2)
         out (byte-array n)]
@@ -42,32 +42,32 @@
       (aset-byte out i (unchecked-byte (Integer/parseInt (subs s (* 2 i) (+ 2 (* 2 i))) 16))))
     out))
 
-(defn bytes->hex ^String [^bytes b]
+(defn bytes->hex ^String [^"[B" b]
   (let [sb (StringBuilder.)]
     (dotimes [i (alength b)]
       (.append sb (format "%02x" (bit-and (aget b i) 0xff))))
     (.toString sb)))
 
-(defn utf8 ^bytes [^String s] (.getBytes s "UTF-8"))
+(defn utf8 ^"[B" [^String s] (.getBytes s "UTF-8"))
 
-(defn- ^bytes pad-left-32 [^bytes b]
+(defn- ^"[B" pad-left-32 [^"[B" b]
   (let [n (alength b) out (byte-array 32)]
     (System/arraycopy b 0 out (- 32 n) n)
     out))
 
-(defn- ^bytes concat-bytes [arrays]
-  (let [total (reduce (fn [^long n ^bytes a] (+ n (alength a))) 0 arrays)
+(defn- ^"[B" concat-bytes [arrays]
+  (let [total (reduce (fn [^long n ^"[B" a] (+ n (alength a))) 0 arrays)
         out (byte-array total)]
     (loop [off 0 ps arrays]
       (if (seq ps)
-        (let [^bytes p (first ps)]
+        (let [^"[B" p (first ps)]
           (System/arraycopy p 0 out off (alength p))
           (recur (+ off (alength p)) (rest ps)))
         out))))
 
 ;; ─── Keccak-256 (Keccak-f[1600], Ethereum padding — NOT SHA3) ─────────
 
-(def ^:private ^longs RC
+(def ^:private ^"[J" RC
   (long-array
    [0x0000000000000001 0x0000000000008082 (unchecked-long 0x800000000000808A)
     (unchecked-long 0x8000000080008000) 0x000000000000808B 0x0000000080000001
@@ -80,7 +80,7 @@
     0x0000000080000001 (unchecked-long 0x8000000080008008)]))
 
 ;; rotation offsets r[x][y] at flat index x+5y
-(def ^:private ^ints ROT
+(def ^:private ^"[I" ROT
   (int-array
    [0 1 62 28 27
     36 44 6 55 20
@@ -88,11 +88,11 @@
     41 45 15 21 8
     18 2 61 56 14]))
 
-(defn- ^long rotl64 [^long x ^long n]
+(defn- rotl64 [^long x ^long n]
   (if (zero? n) x
       (bit-or (bit-shift-left x n) (unsigned-bit-shift-right x (- 64 n)))))
 
-(defn- keccak-f! [^longs a]
+(defn- keccak-f! [^"[J" a]
   (let [bc (long-array 5)
         tmp (long-array 25)]
     (dotimes [round 24]
@@ -122,7 +122,7 @@
       (aset a 0 (bit-xor (aget a 0) (aget RC round))))
     a))
 
-(defn keccak256 ^bytes [^bytes input]
+(defn keccak256 ^"[B" [^"[B" input]
   (let [rate 136                          ; 1088 bits = 256-bit output
         a (long-array 25)
         len (alength input)
@@ -195,11 +195,11 @@
                        ")"))
                 ordered))))
 
-(defn type-hash ^bytes [types primary]
+(defn type-hash ^"[B" [types primary]
   (keccak256 (utf8 (encode-type types primary))))
 
-(defn- ^bytes uint->32 [v]
-  (let [^bytes ba (.toByteArray (biginteger v))   ; big-endian, two's-complement
+(defn- ^"[B" uint->32 [v]
+  (let [^"[B" ba (.toByteArray (biginteger v))   ; big-endian, two's-complement
         n (alength ba)]
     (cond
       (= n 32) ba
@@ -207,7 +207,7 @@
       :else (let [out (byte-array 32)]              ; n=33 leading sign byte
               (System/arraycopy ba (- n 32) out 0 32) out))))
 
-(defn- ^bytes encode-field [types type value]
+(defn- ^"[B" encode-field [types type value]
   (cond
     (contains? types type) (keccak256 (encode-data types type value))   ; nested struct
     (= type "string")  (keccak256 (utf8 value))
@@ -219,13 +219,13 @@
     (str/starts-with? type "int")  (uint->32 value)
     :else (throw (ex-info (str "unsupported EIP-712 type: " type) {:type type}))))
 
-(defn encode-data ^bytes [types primary data]
+(defn encode-data ^"[B" [types primary data]
   (concat-bytes
    (cons (type-hash types primary)
          (map (fn [{:keys [name type]}] (encode-field types type (get data name)))
               (get types primary)))))
 
-(defn hash-struct ^bytes [types primary data]
+(defn hash-struct ^"[B" [types primary data]
   (keccak256 (encode-data types primary data)))
 
 (def ^:private EIP712-DOMAIN-TYPE
@@ -234,10 +234,10 @@
                    {:name "chainId" :type "uint256"}
                    {:name "verifyingContract" :type "address"}]})
 
-(defn domain-separator ^bytes [domain]
+(defn domain-separator ^"[B" [domain]
   (hash-struct EIP712-DOMAIN-TYPE "EIP712Domain" domain))
 
-(defn eip712-digest ^bytes [domain types primary message]
+(defn eip712-digest ^"[B" [domain types primary message]
   (let [ds (domain-separator domain)
         hs (hash-struct types primary message)
         pre (byte-array 66)]
@@ -300,7 +300,7 @@
 (defn ecrecover
   "Recover the signer's 20-byte address from a 32-byte EIP-712 `digest` and a
   65-byte `sig` (r‖s‖v). v ∈ {27,28} (or {0,1}); recovery id = v mod 27."
-  ^bytes [^bytes digest ^bytes sig]
+  ^"[B" [^"[B" digest ^"[B" sig]
   (let [r (BigInteger. 1 (java.util.Arrays/copyOfRange sig 0 32))
         s (BigInteger. 1 (java.util.Arrays/copyOfRange sig 32 64))
         v (bit-and (aget sig 64) 0xff)
@@ -316,11 +316,11 @@
         Q (pt-mul r-inv (pt-add sR neg-eG))
         [qx qy] Q
         pub (byte-array 64)]
-    (System/arraycopy (pad-left-32 (let [^bytes b (.toByteArray ^BigInteger qx)]
+    (System/arraycopy (pad-left-32 (let [^"[B" b (.toByteArray ^BigInteger qx)]
                                      (if (> (alength b) 32)
                                        (java.util.Arrays/copyOfRange b (- (alength b) 32) (alength b)) b)))
                       0 pub 0 32)
-    (System/arraycopy (pad-left-32 (let [^bytes b (.toByteArray ^BigInteger qy)]
+    (System/arraycopy (pad-left-32 (let [^"[B" b (.toByteArray ^BigInteger qy)]
                                      (if (> (alength b) 32)
                                        (java.util.Arrays/copyOfRange b (- (alength b) 32) (alength b)) b)))
                       0 pub 32 32)
@@ -328,7 +328,7 @@
 
 (defn ecrecover-checksum
   "ecrecover then EIP-55 checksum the recovered address."
-  ^String [^bytes digest ^bytes sig]
+  ^String [^"[B" digest ^"[B" sig]
   (eip55-checksum (ecrecover digest sig)))
 
 ;; ─── public key / address from private key ───────────────────────────
@@ -337,7 +337,7 @@
   "secp256k1 public key from a 32-byte private key. Returns the 64-byte
   uncompressed point X‖Y (WITHOUT the 0x04 prefix), i.e. keccak256 of this is
   the address preimage."
-  ^bytes [^bytes privkey]
+  ^"[B" [^"[B" privkey]
   (let [d (BigInteger. 1 privkey)
         [qx qy] (pt-mul d G)
         pub (byte-array 64)]
@@ -348,13 +348,13 @@
 (defn address-of-privkey
   "EIP-55 checksummed 0x… address controlled by a 32-byte private key:
   last 20 bytes of keccak256(uncompressed-pubkey-without-04-prefix)."
-  ^String [^bytes privkey]
+  ^String [^"[B" privkey]
   (eip55-checksum
    (java.util.Arrays/copyOfRange (keccak256 (private->public privkey)) 12 32)))
 
 ;; ─── deterministic ECDSA signing (RFC 6979 + EIP-2 low-s) ────────────
 
-(defn- ^bytes hmac-sha256 [^bytes key ^bytes data]
+(defn- ^"[B" hmac-sha256 [^"[B" key ^"[B" data]
   (let [mac (javax.crypto.Mac/getInstance "HmacSHA256")]
     (.init mac (javax.crypto.spec.SecretKeySpec. key "HmacSHA256"))
     (.doFinal mac data)))
@@ -366,7 +366,7 @@
   32-byte `privkey`, using an RFC 6979 (HMAC-SHA256) nonce and EIP-2 low-s
   normalization (s ≤ n/2). Returns {:r BigInteger :s BigInteger :recovery-id 0|1}.
   Pure java.math.BigInteger + javax.crypto HMAC (both available in babashka)."
-  [^bytes privkey ^bytes digest]
+  [^"[B" privkey ^"[B" digest]
   (let [n SECP-N
         z (BigInteger. 1 digest)               ; bits2int(h1), 256-bit
         d (BigInteger. 1 privkey)
@@ -406,18 +406,18 @@
 
 ;; ─── RLP encoding (canonical Ethereum) ───────────────────────────────
 
-(defn- ^bytes uint->minimal
+(defn- ^"[B" uint->minimal
   "Minimal big-endian byte-string of a non-negative integer (0 → empty)."
   [v]
   (let [bi (biginteger v)]
     (if (= bi BigInteger/ZERO)
       (byte-array 0)
-      (let [^bytes b (.toByteArray bi)]
+      (let [^"[B" b (.toByteArray bi)]
         (if (and (> (alength b) 1) (zero? (aget b 0)))
           (java.util.Arrays/copyOfRange b 1 (alength b))   ; strip sign byte
           b)))))
 
-(defn- ^bytes rlp-prefix
+(defn- ^"[B" rlp-prefix
   "RLP length prefix. `offset` is 0x80 (byte-string) or 0xc0 (list)."
   [^long offset ^long len]
   (if (< len 56)
@@ -429,11 +429,11 @@
 (defn rlp-encode
   "Canonical recursive RLP. `item` is a byte-array (byte-string) or a sequential
   collection of items (list). Returns the RLP bytes."
-  ^bytes [item]
+  ^"[B" [item]
   (if (sequential? item)
     (let [payload (concat-bytes (map rlp-encode item))]
       (concat-bytes [(rlp-prefix 0xc0 (alength payload)) payload]))
-    (let [^bytes b item
+    (let [^"[B" b item
           n (alength b)]
       (if (and (= n 1) (< (bit-and (aget b 0) 0xff) 0x80))
         b                                              ; single byte < 0x80 → itself
@@ -441,7 +441,7 @@
 
 ;; ─── EIP-155 legacy transaction signing ──────────────────────────────
 
-(defn- ^bytes ->num-bytes
+(defn- ^"[B" ->num-bytes
   "Coerce an int / 0x-hex string / bytes numeric field to its minimal RLP
   big-endian byte-string."
   [v]
@@ -450,9 +450,9 @@
      (nil? v)     BigInteger/ZERO
      (number? v)  (biginteger v)
      (string? v)  (let [s (strip0x v)] (if (empty? s) BigInteger/ZERO (BigInteger. s 16)))
-     :else        (BigInteger. 1 ^bytes v))))
+     :else        (BigInteger. 1 ^"[B" v))))
 
-(defn- ^bytes ->byte-str
+(defn- ^"[B" ->byte-str
   "Coerce a 0x-hex string / bytes / nil opaque field (address, data) to bytes."
   [v]
   (cond
@@ -465,7 +465,7 @@
   :nonce :gas-price :gas :to :value :data :chain-id (each an int, 0x-hex string,
   or bytes; :to/:data are opaque byte-strings, the rest are numbers). Returns the
   0x… RLP-encoded raw signed transaction hex ready for eth_sendRawTransaction."
-  ^String [tx ^bytes privkey]
+  ^String [tx ^"[B" privkey]
   (let [{:keys [nonce gas-price gas to value data chain-id]} tx
         nonce-b (->num-bytes nonce)
         gp-b    (->num-bytes gas-price)

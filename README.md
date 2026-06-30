@@ -1,5 +1,7 @@
 # eth-crypto-clj
 
+[![CI](https://github.com/kotoba-lang/eth-crypto/actions/workflows/ci.yml/badge.svg)](https://github.com/kotoba-lang/eth-crypto/actions/workflows/ci.yml)
+
 Standalone, **dependency-free** Ethereum crypto primitives for Clojure — runs
 unchanged under **babashka** and the JVM (only `clojure.*` + `java.math.BigInteger`).
 
