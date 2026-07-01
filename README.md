@@ -5,10 +5,9 @@
 Standalone, **dependency-free** Ethereum crypto primitives for Clojure — runs
 unchanged under **babashka** and the JVM (only `clojure.*` + `java.math.BigInteger`).
 
-Sibling of [`ed25519-clj`](https://github.com/com-junkawasaki/ed25519-clj) /
-[`cacao-clj`](https://github.com/com-junkawasaki/cacao-clj): where those cover the
-did:key / Ed25519 / CACAO side, this covers the **Ethereum secp256k1 / Keccak-256 /
-EIP-712** side that the org otherwise lacked in Clojure.
+Sibling of [`kotoba-lang/ed25519`](https://github.com/kotoba-lang/ed25519):
+where that covers the did:key / Ed25519 side, this covers the **Ethereum
+secp256k1 / Keccak-256 / EIP-712** side in Clojure.
 
 ## Why pure Clojure (not BouncyCastle)
 
@@ -60,7 +59,7 @@ the full raw signed tx all match byte-for-byte, plus a sign→`ecrecover` roundt
 an `address-of-privkey` vector — see `test/eth_crypto/test_signing.cljc`:
 
 ```bash
-bb --classpath src:test -e "(require 'eth-crypto.test-signing)(clojure.test/run-tests 'eth-crypto.test-signing)"
+clojure -M:test
 # Ran 5 tests containing 7 assertions. 0 failures, 0 errors.
 ```
 
@@ -68,7 +67,7 @@ bb --classpath src:test -e "(require 'eth-crypto.test-signing)(clojure.test/run-
 
 ```clojure
 ;; deps.edn / bb.edn
-io.github.com-junkawasaki/eth-crypto-clj {:git/sha "<sha>"}
+io.github.kotoba-lang/eth-crypto {:git/sha "<sha>"}
 
 ;; code
 (require '[eth-crypto.core :as eth])
@@ -79,7 +78,7 @@ io.github.com-junkawasaki/eth-crypto-clj {:git/sha "<sha>"}
 ## Test
 
 ```bash
-bb --classpath src:test -e "(require 'eth-crypto.test-eth-crypto)(clojure.test/run-tests 'eth-crypto.test-eth-crypto)"
+clojure -M:test
 # Ran 5 tests containing 7 assertions. 0 failures, 0 errors.
 ```
 
