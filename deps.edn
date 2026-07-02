@@ -12,4 +12,7 @@
          ;; (do not end in -test), so widen the discovery regex from the default -test$.
          :main-opts ["-m" "cognitect.test-runner" "-r" ".*"]
          :exec-fn cognitect.test-runner.api/test
-         :exec-args {:namespace-regex ".*"}}}}
+         :exec-args {:namespace-regex ".*"}}
+  :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"
+                     "--fail-level" "error"]}}}

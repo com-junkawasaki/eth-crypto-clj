@@ -31,10 +31,10 @@
                      (#'eth/->num-bytes 21000)
                      (eth/hex->bytes "0x3535353535353535353535353535353535353535")
                      (#'eth/->num-bytes 1000000000000000000)
-                     (byte-array 0)
+                     #?(:clj (byte-array 0) :cljs [])
                      (#'eth/->num-bytes 1)
-                     (byte-array 0)
-                     (byte-array 0)]))]
+                     #?(:clj (byte-array 0) :cljs [])
+                     #?(:clj (byte-array 0) :cljs [])]))]
       (is (= "0xdaf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"
              (str "0x" (eth/bytes->hex sighash)))))))
 
@@ -67,9 +67,14 @@
   (testing "ecrecover of our own signature recovers the signer address"
     (let [digest (eth/keccak256 (eth/utf8 "the founder authorized self-implementing clj"))
           {:keys [r s recovery-id]} (eth/secp256k1-sign eip155-privkey digest)
-          sig (byte-array 65)]
-      (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal r)) 0 sig 0 32)
-      (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal s)) 0 sig 32 32)
-      (aset-byte sig 64 (unchecked-byte (+ recovery-id 27)))
+          sig #?(:clj (byte-array 65) :cljs (vec (repeat 65 0)))]
+      ;; sig is a real Java byte[] only under :clj -- keccak256/secp256k1-sign
+      ;; above are :clj-only (throw via their :cljs stub before this point is
+      ;; ever reached at runtime under :cljs), so this mutation is :clj-only too.
+      #?(:clj
+         (do
+           (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal r)) 0 sig 0 32)
+           (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal s)) 0 sig 32 32)
+           (aset-byte sig 64 (unchecked-byte (+ recovery-id 27)))))
       (is (= (eth/address-of-privkey eip155-privkey)
              (eth/ecrecover-checksum digest sig))))))
