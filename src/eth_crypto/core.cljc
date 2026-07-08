@@ -79,17 +79,22 @@
 
 (defn hex->bytes
   "0x-prefixed (or bare) hex string -> bytes. Returns a real byte-array under
-  :clj; returns a vector of 0..255 ints under :cljs (no byte-array there)."
+  :clj; returns a vector of 0..255 ints under :cljs (no byte-array there).
+  Throws on an odd-length hex string -- an odd number of hex digits is
+  never valid encoded byte data, and `(quot (count s) 2)` would otherwise
+  silently drop the trailing nibble instead of erroring."
   [s]
-  (let [s (strip0x s)
-        n (quot (count s) 2)]
-    #?(:clj
-       (let [out (byte-array n)]
-         (dotimes [i n]
-           (aset-byte out i (unchecked-byte (Integer/parseInt (subs s (* 2 i) (+ 2 (* 2 i))) 16))))
-         out)
-       :cljs
-       (mapv #(js/parseInt (subs s (* 2 %) (+ 2 (* 2 %))) 16) (range n)))))
+  (let [s (strip0x s)]
+    (when (odd? (count s))
+      (throw (ex-info "eth-crypto: odd-length hex string" {:s s})))
+    (let [n (quot (count s) 2)]
+      #?(:clj
+         (let [out (byte-array n)]
+           (dotimes [i n]
+             (aset-byte out i (unchecked-byte (Integer/parseInt (subs s (* 2 i) (+ 2 (* 2 i))) 16))))
+           out)
+         :cljs
+         (mapv #(js/parseInt (subs s (* 2 %) (+ 2 (* 2 %))) 16) (range n))))))
 
 (def ^:private hex-digits "0123456789abcdef")
 

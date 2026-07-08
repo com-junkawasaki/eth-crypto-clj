@@ -21,6 +21,15 @@
   (is (= "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
          (eth/eip55-checksum "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"))))
 
+;; ── hex->bytes ──
+(deftest hex->bytes-roundtrip-and-odd-length-rejection
+  (is (= [0xab 0xcd] (map #(bit-and % 0xff) (eth/hex->bytes "0xabcd"))))
+  (is (= [] (vec (eth/hex->bytes "0x"))))
+  (testing "odd-length hex (an obviously truncated/malformed nibble count)
+            throws instead of silently dropping the trailing nibble"
+    (is (thrown? #?(:clj Exception :cljs js/Error) (eth/hex->bytes "0xabc")))
+    (is (thrown? #?(:clj Exception :cljs js/Error) (eth/hex->bytes "0x1")))))
+
 ;; ── EIP-712 'Ether Mail' canonical vector ──
 (def domain
   {"name" "Ether Mail" "version" "1" "chainId" 1
