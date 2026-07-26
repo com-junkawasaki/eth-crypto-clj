@@ -24,31 +24,25 @@
 
 (deftest eip155-signing-hash
   (testing "keccak of RLP([nonce,gasPrice,gas,to,value,data,chainId,0,0])"
-    (let [sighash (eth/keccak256
-                   (eth/rlp-encode
-                    [(#'eth/->num-bytes 9)
-                     (#'eth/->num-bytes 20000000000)
-                     (#'eth/->num-bytes 21000)
-                     (eth/hex->bytes "0x3535353535353535353535353535353535353535")
-                     (#'eth/->num-bytes 1000000000000000000)
-                     #?(:clj (byte-array 0) :cljs [])
-                     (#'eth/->num-bytes 1)
-                     #?(:clj (byte-array 0) :cljs [])
-                     #?(:clj (byte-array 0) :cljs [])]))]
-      (is (= "0xdaf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"
-             (str "0x" (eth/bytes->hex sighash)))))))
+    ;; via the public `legacy-digest` rather than assembling RLP fields with
+    ;; private vars, so this runs identically on both platforms.
+    (is (= "0xdaf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"
+           (str "0x" (eth/bytes->hex (eth/legacy-digest eip155-tx)))))))
 
 (deftest eip155-signature-values
   (testing "RFC-6979 deterministic v/r/s for the EIP-155 example"
     (let [sighash (eth/hex->bytes
                    "0xdaf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53")
-          {:keys [r s recovery-id]} (eth/secp256k1-sign eip155-privkey sighash)
-          v (+ recovery-id (* 2 1) 35)]
+          sig (eth/secp256k1-sign eip155-privkey sighash)
+          ;; r‖s‖v via the public helper — r and s here are both exactly 32
+          ;; bytes, so their padded and minimal encodings coincide.
+          rsv (eth/signature->bytes sig)
+          v (+ (:recovery-id sig) (* 2 1) 35)]
       (is (= 37 v) "v = recovery-id + chainId*2 + 35")
       (is (= "28ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276"
-             (eth/bytes->hex (#'eth/uint->minimal r))) "r")
+             (eth/bytes->hex (take 32 rsv))) "r")
       (is (= "67cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
-             (eth/bytes->hex (#'eth/uint->minimal s))) "s"))))
+             (eth/bytes->hex (take 32 (drop 32 rsv)))) "s"))))
 
 (deftest eip155-raw-signed-tx
   (testing "full raw signed tx matches EIP-155 spec byte-for-byte"
@@ -65,17 +59,10 @@
 ;; ── sign → ecrecover roundtrip ──
 (deftest sign-ecrecover-roundtrip
   (testing "ecrecover of our own signature recovers the signer address"
+    ;; Both platforms now really sign and really recover -- there is no :cljs
+    ;; stub left to short-circuit this, so the assertion is meaningful on both.
     (let [digest (eth/keccak256 (eth/utf8 "the founder authorized self-implementing clj"))
-          {:keys [r s recovery-id]} (eth/secp256k1-sign eip155-privkey digest)
-          sig #?(:clj (byte-array 65) :cljs (vec (repeat 65 0)))]
-      ;; sig is a real Java byte[] only under :clj -- keccak256/secp256k1-sign
-      ;; above are :clj-only (throw via their :cljs stub before this point is
-      ;; ever reached at runtime under :cljs), so this mutation is :clj-only too.
-      #?(:clj
-         (do
-           (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal r)) 0 sig 0 32)
-           (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal s)) 0 sig 32 32)
-           (aset-byte sig 64 (unchecked-byte (+ recovery-id 27)))))
+          sig (eth/signature->bytes (eth/secp256k1-sign eip155-privkey digest))]
       (is (= (eth/address-of-privkey eip155-privkey)
              (eth/ecrecover-checksum digest sig))))))
 
@@ -163,13 +150,7 @@
 (deftest eip1559-digest-recovers-signer
   (testing "the type-2 digest + our signature recovers the signer's address"
     (let [digest (eth/eip1559-digest eip1559-tx)
-          {:keys [r s recovery-id]} (eth/secp256k1-sign eip155-privkey digest)
-          sig #?(:clj (byte-array 65) :cljs (vec (repeat 65 0)))]
-      #?(:clj
-         (do
-           (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal r)) 0 sig 0 32)
-           (System/arraycopy (#'eth/pad-left-32 (#'eth/uint->minimal s)) 0 sig 32 32)
-           (aset-byte sig 64 (unchecked-byte (+ recovery-id 27)))))
+          sig (eth/signature->bytes (eth/secp256k1-sign eip155-privkey digest))]
       (is (= eip1559-address (eth/ecrecover-checksum digest sig))))))
 
 (deftest eip1559-out-of-process-signer-assembly

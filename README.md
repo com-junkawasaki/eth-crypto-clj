@@ -2,21 +2,56 @@
 
 [![CI](https://github.com/kotoba-lang/eth-crypto/actions/workflows/ci.yml/badge.svg)](https://github.com/kotoba-lang/eth-crypto/actions/workflows/ci.yml)
 
-Standalone, **dependency-free** Ethereum crypto primitives for Clojure — runs
-unchanged under **babashka** and the JVM (only `clojure.*` + `java.math.BigInteger`).
+Standalone, **dependency-free** Ethereum crypto primitives in `.cljc` — Keccak-256,
+EIP-55, EIP-712 typed data, secp256k1 sign/recover, RLP, and EIP-155 legacy +
+**EIP-1559 (type-2)** transaction signing.
+
+**The whole public API runs on both platforms**: the JVM/babashka (`clojure.*` +
+`java.math.BigInteger`) and **ClojureScript** (`js/BigInt`). No third-party
+dependencies on either. That means the same code signs a transaction in a Node
+script and in a browser wallet where the key never leaves the user's device.
 
 Sibling of [`kotoba-lang/ed25519`](https://github.com/kotoba-lang/ed25519):
 where that covers the did:key / Ed25519 side, this covers the **Ethereum
-secp256k1 / Keccak-256 / EIP-712** side in Clojure.
+secp256k1 / Keccak-256 / EIP-712** side.
 
-## Why pure Clojure (not BouncyCastle)
+## Why pure Clojure/ClojureScript (no BouncyCastle, no @noble)
 
 babashka is a GraalVM *native image*: it can only use Java classes baked into the bb
 binary. Arbitrary jars on the classpath are **not** loadable at runtime
 (`java.security` exposes SHA3-256 but **not** Keccak-256, and any `org.bouncycastle.*`
 import throws `ClassNotFoundException`). So Keccak-256 is the Keccak-f[1600] permutation
-implemented here, and secp256k1 ecrecover uses `java.math.BigInteger` (which IS available
-in bb). The result runs identically on bb and the JVM with zero native dependencies.
+implemented here, and secp256k1 uses `java.math.BigInteger` (which IS available in bb).
+
+## The ClojureScript half, and the trap it had to avoid
+
+This library was `:clj`-only for its entire crypto half, with throwing `:cljs`
+stubs. The reasons were real, and worth stating because they generalise:
+
+- **Keccak-f[1600] cannot be naively ported.** It permutes 25 **64-bit** lanes, and
+  cljs's `bit-xor`/`bit-and`/`bit-shift-left` compile to native JS bitwise
+  operators, which ECMAScript defines on **32-bit** integers. A naive port does not
+  fail to compile — it silently truncates every lane and returns a **wrong hash**:
+  a wrong address, a wrong function selector, a wrong signing digest, with no error
+  anywhere. `eth-crypto.keccak` carries lanes as `js/BigInt` instead (JS bitwise
+  operators are defined on BigInt too).
+- **`js/BigInt` has no `modInverse` and no `modPow`**, which secp256k1's field
+  arithmetic needs. `eth-crypto.secp256k1` implements both (extended Euclid,
+  square-and-multiply).
+- **RFC 6979 needs HMAC-SHA256, and `SubtleCrypto` is async** — using it would make
+  signing return a Promise and infect every caller. `eth-crypto.sha256` is a pure
+  cljs implementation; SHA-256 is defined on 32-bit words, so unlike Keccak it is a
+  natural fit.
+- **RLP needs a type-level distinction between a byte string and a list.** On the
+  JVM a `byte-array` is not `sequential?` and a vector is, so `rlp-encode` can tell
+  them apart. In cljs both would be vectors — and `[1 2 3]` as a byte string encodes
+  to `83 01 02 03` while the same value as a list encodes to `c3 01 02 03`. So on
+  the cljs side a **JS array** is a byte string and a cljs vector is a list.
+
+Also true on both platforms and stated rather than left implicit: **this is not
+constant-time.** `BigInteger`/`BigInt` arithmetic is variable-time and point
+multiplication is a plain double-and-add. Fine for signing with a key its owner
+controls; **not** suitable for a shared process signing on behalf of others.
 
 ## API (`eth-crypto.core`)
 
@@ -76,10 +111,24 @@ pre-broadcast tx hash, for both an empty access list (`yParity` 0) and a
 two-slot access list with calldata (`yParity` 1). That makes it a genuine
 cross-implementation check rather than a snapshot of this library's own output.
 
+**Both platforms are gated on the SAME vectors.** That is what makes the cljs port
+trustworthy rather than merely present: a wrong Keccak lane, a wrong modular
+inverse or a wrong deterministic nonce cannot accidentally reproduce a published
+signature.
+
 ```bash
-clojure -M:test
-# Ran 20 tests containing 28 assertions. 0 failures, 0 errors.
+clojure -M:test                             # JVM  — 20 tests, 28 assertions
+nbb --classpath src:test bin/run_tests.cljs  # cljs — 29 tests, 48 assertions
+clojure -M:lint
 ```
+
+The cljs run includes the shared `.cljc` suite plus `test_cljs_primitives.cljs`,
+which checks the two primitives written from scratch at their own level: SHA-256
+and HMAC-SHA256 against canonical digests (their 64 round constants are
+transcribed — the error-prone part), Keccak on a **multi-block** input (200 bytes >
+the 136-byte rate, which the short shared vectors never exercise), and
+`mod-inverse`/`mod-pow` against Fermat's little theorem on the real secp256k1
+field.
 
 ## Usage
 
