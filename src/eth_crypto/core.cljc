@@ -64,7 +64,11 @@
     address-of-privkey 32-byte privkey -> EIP-55 0x… address [:clj-only]
     secp256k1-sign      privkey + digest -> {:r :s :recovery-id} (RFC 6979, low-s) [:clj-only]
     rlp-encode           byte-string / nested list -> canonical Ethereum RLP bytes [:clj-only]
-    sign-tx-legacy       tx + privkey -> 0x… raw signed EIP-155 legacy transaction [:clj-only]"
+    sign-tx-legacy       tx + privkey -> 0x… raw signed EIP-155 legacy transaction [:clj-only]
+    eip1559-digest       tx -> 32-byte digest keccak(0x02 || rlp(payload)) [:clj-only]
+    eip1559-raw          tx + {:r :s :recovery-id} -> 0x… raw signed type-2 tx [:clj-only]
+    sign-tx-eip1559      tx + privkey -> 0x… raw signed EIP-1559 (type-2) transaction [:clj-only]
+    raw-tx-hash          raw signed tx (hex/bytes) -> 0x… tx hash, pre-broadcast [:clj-only]"
   (:require [clojure.string :as str]))
 
 ;; ─── hex / byte helpers — PORTABLE (:clj + :cljs) ─────────────────────
@@ -593,6 +597,85 @@
                          (->num-bytes v) (->num-bytes r) (->num-bytes s)])]
     (str "0x" (bytes->hex raw))))
 
+;; ─── EIP-1559 (type-2) transaction signing ───────────────────────────
+;; EIP-2718 typed envelope: TransactionType 0x02 || rlp(payload). Unlike a
+;; legacy tx, the chain id is a FIRST-CLASS payload field (not folded into v),
+;; and the signature's parity is a plain yParity 0/1 — the EIP-155
+;; v = recovery-id + chainId*2 + 35 arithmetic does NOT apply here.
+
+(def eip1559-tx-type
+  "EIP-2718 TransactionType byte for an EIP-1559 tx."
+  0x02)
+
+(defn- access-list-items
+  "Access list -> RLP item structure [[address20 [slot32 …]] …]. Accepts
+  {:address … :storage-keys […]} (also tolerates the JSON-ish :storageKeys /
+  string keys an RPC response hands back). nil / empty -> empty RLP list (0xc0)."
+  [access-list]
+  (mapv (fn [entry]
+          (let [address (or (:address entry) (get entry "address"))
+                slots (or (:storage-keys entry) (:storageKeys entry)
+                          (get entry "storageKeys") (get entry "storage-keys") [])]
+            [(->byte-str address) (mapv ->byte-str slots)]))
+        (or access-list [])))
+
+(defn- eip1559-payload-items
+  "The 9 signed payload fields of an EIP-1559 tx, in EIP-1559 order."
+  [tx]
+  (let [{:keys [chain-id nonce max-priority-fee-per-gas max-fee-per-gas
+                gas to value data access-list]} tx]
+    [(->num-bytes chain-id)
+     (->num-bytes nonce)
+     (->num-bytes max-priority-fee-per-gas)
+     (->num-bytes max-fee-per-gas)
+     (->num-bytes gas)
+     (->byte-str to)
+     (->num-bytes value)
+     (->byte-str data)
+     (access-list-items access-list)]))
+
+(defn eip1559-digest
+  "The 32-byte digest an EIP-1559 tx is signed over:
+  keccak256(0x02 || rlp([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas,
+  gas, to, value, data, accessList])). Exposed separately from
+  `sign-tx-eip1559` so a signer that does NOT hold the key in this process
+  (hardware wallet, passkey/WebAuthn, remote KMS) can be handed the digest."
+  ^"[B" [tx]
+  (keccak256 (concat-bytes [(byte-array [(unchecked-byte eip1559-tx-type)])
+                            (rlp-encode (eip1559-payload-items tx))])))
+
+(defn eip1559-raw
+  "Assemble the raw signed EIP-1559 tx from `tx` and an already-computed
+  signature {:r :s :recovery-id} (recovery-id IS the yParity here — 0 or 1).
+  Split out from `sign-tx-eip1559` so an out-of-process signer's r/s/parity can
+  be assembled into a broadcastable tx without re-signing."
+  ^String [tx {:keys [r s recovery-id]}]
+  (let [raw (concat-bytes
+             [(byte-array [(unchecked-byte eip1559-tx-type)])
+              (rlp-encode (conj (eip1559-payload-items tx)
+                                (->num-bytes recovery-id)
+                                (->num-bytes r)
+                                (->num-bytes s)))])]
+    (str "0x" (bytes->hex raw))))
+
+(defn sign-tx-eip1559
+  "Sign an EIP-1559 (type-2) transaction. `tx` is a map with keys :chain-id
+  :nonce :max-priority-fee-per-gas :max-fee-per-gas :gas :to :value :data
+  :access-list (numbers may be ints / 0x-hex / bytes; :to and :data are opaque
+  byte-strings; :access-list is a seq of {:address … :storage-keys […]} and may
+  be omitted). Returns the 0x… EIP-2718-enveloped raw signed transaction hex,
+  ready for eth_sendRawTransaction."
+  ^String [tx ^"[B" privkey]
+  (eip1559-raw tx (secp256k1-sign privkey (eip1559-digest tx))))
+
+(defn raw-tx-hash
+  "keccak256 of a raw (already signed) transaction — i.e. the transaction hash
+  a node will report, computable BEFORE broadcasting. Works for both legacy and
+  EIP-2718-typed raw txs (the typed envelope is hashed including its type byte).
+  Accepts the 0x… hex string `sign-tx-legacy`/`sign-tx-eip1559` return, or bytes."
+  ^String [raw]
+  (str "0x" (bytes->hex (keccak256 (->byte-str raw)))))
+
 )) ;; end #?(:clj (do …)) — EIP-712 values / secp256k1 / RLP / tx signing
 
 ;; ClojureScript: same public API as the block above, throwing (all of it
@@ -619,4 +702,9 @@
   (defn address-of-privkey [& _] (nope "address-of-privkey"))
   (defn secp256k1-sign [& _] (nope "secp256k1-sign"))
   (defn rlp-encode [& _] (nope "rlp-encode"))
-  (defn sign-tx-legacy [& _] (nope "sign-tx-legacy"))))
+  (defn sign-tx-legacy [& _] (nope "sign-tx-legacy"))
+  (def eip1559-tx-type 0x02)   ; a plain constant, safe to define here
+  (defn eip1559-digest [& _] (nope "eip1559-digest"))
+  (defn eip1559-raw [& _] (nope "eip1559-raw"))
+  (defn sign-tx-eip1559 [& _] (nope "sign-tx-eip1559"))
+  (defn raw-tx-hash [& _] (nope "raw-tx-hash"))))
