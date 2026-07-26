@@ -43,3 +43,23 @@ jobs:
 
       - name: Run tests
         run: clojure -M:test
+
+  cljs:
+    name: nbb (ClojureScript — same spec vectors)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install nbb
+        run: npm install -g nbb
+
+      # Not a smoke test: this runs the SHARED .cljc suite, so the EIP-712
+      # 'Ether Mail' digest, the EIP-155 canonical worked example and viem's
+      # EIP-1559 vectors all have to pass with BigInt Keccak lanes, pure-cljs
+      # HMAC-SHA256 and hand-written modInverse/modPow.
+      - name: Run tests under ClojureScript
+        run: nbb --classpath src:test bin/run_tests.cljs
