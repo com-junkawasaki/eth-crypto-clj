@@ -431,9 +431,15 @@
         y (if (= (.testBit y 0) (boolean y-odd?)) y (.subtract SECP-P y))]
     [x y]))
 
-(defn ecrecover
-  "Recover the signer's 20-byte address from a 32-byte EIP-712 `digest` and a
-  65-byte `sig` (r‖s‖v). v ∈ {27,28} (or {0,1}); recovery id = v mod 27."
+(defn ecrecover-pubkey
+  "Recover the signer's **public key** from a 32-byte `digest` and a 65-byte
+  `sig` (r‖s‖v). Returns the 64-byte uncompressed point X‖Y, without the
+  `0x04` prefix — the same shape `private->public` returns.
+
+  Ethereum hashes this with keccak and keeps the last 20 bytes, which is what
+  `ecrecover` does. Other chains do not: a Filecoin `f1` address is
+  BLAKE2b-160 of the **65-byte** form, `0x04` ‖ this. So recovery and address
+  derivation are separate steps, and only the first is the curve's business."
   ^"[B" [^"[B" digest ^"[B" sig]
   (let [r (BigInteger. 1 (java.util.Arrays/copyOfRange sig 0 32))
         s (BigInteger. 1 (java.util.Arrays/copyOfRange sig 32 64))
@@ -458,7 +464,13 @@
                                      (if (> (alength b) 32)
                                        (java.util.Arrays/copyOfRange b (- (alength b) 32) (alength b)) b)))
                       0 pub 32 32)
-    (java.util.Arrays/copyOfRange (keccak256 pub) 12 32)))
+    pub))
+
+(defn ecrecover
+  "Recover the signer's 20-byte address from a 32-byte EIP-712 `digest` and a
+  65-byte `sig` (r‖s‖v). v ∈ {27,28} (or {0,1}); recovery id = v mod 27."
+  ^"[B" [^"[B" digest ^"[B" sig]
+  (java.util.Arrays/copyOfRange (keccak256 (ecrecover-pubkey digest sig)) 12 32))
 
 (defn ecrecover-checksum
   "ecrecover then EIP-55 checksum the recovered address."
@@ -761,6 +773,7 @@
     (vec (js-core/domain-separator domain encode-type)))
   (defn eip712-digest [domain types primary message]
     (vec (js-core/eip712-digest domain types primary message encode-type)))
+  (defn ecrecover-pubkey [digest sig] (secp/ecrecover-pubkey digest sig))
   (defn ecrecover [digest sig] (secp/ecrecover digest sig))
   (defn ecrecover-checksum [digest sig] (eip55-checksum (secp/ecrecover digest sig)))
   (defn private->public [privkey] (secp/private->public privkey))

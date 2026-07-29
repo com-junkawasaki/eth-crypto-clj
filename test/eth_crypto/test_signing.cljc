@@ -8,6 +8,12 @@
   (:require [clojure.test :refer [deftest is testing]]
             [eth-crypto.core :as eth]))
 
+(defn- pad64
+  "A BigInteger/BigInt as 64 hex digits."
+  [n]
+  (let [h #?(:clj (.toString ^java.math.BigInteger n 16) :cljs (.toString n 16))]
+    (str (apply str (repeat (- 64 (count h)) "0")) h)))
+
 ;; ── EIP-155 canonical worked example ──
 ;; privkey 0x4646...46, the tx below, chainId 1.
 (def eip155-privkey
@@ -160,3 +166,30 @@
     (let [sig (eth/secp256k1-sign eip155-privkey (eth/eip1559-digest eip1559-tx))]
       (is (= (eth/sign-tx-eip1559 eip1559-tx eip155-privkey)
              (eth/eip1559-raw eip1559-tx sig))))))
+
+(deftest ecrecover-pubkey-returns-the-key-not-an-address
+  ;; The step Ethereum hides. `ecrecover` keccaks the recovered key and keeps
+  ;; 20 bytes; a Filecoin f1 address is BLAKE2b-160 of `0x04` ‖ the same key,
+  ;; so the recovery has to be reachable on its own — otherwise every chain
+  ;; that derives an address differently has to re-derive the curve maths.
+  (let [priv (eth/hex->bytes
+              "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
+        pub (eth/private->public priv)
+        digest (eth/keccak256 (eth/utf8 "filecoin"))
+        {:keys [r s recovery-id]} (eth/secp256k1-sign priv digest)
+        sig (vec (concat (seq (eth/hex->bytes (pad64 r)))
+                         (seq (eth/hex->bytes (pad64 s)))
+                         [(+ 27 recovery-id)]))
+        sig #?(:clj (byte-array (map unchecked-byte sig)) :cljs sig)]
+    (is (= 64 (count (seq pub))))
+    (is (= (map #(bit-and % 0xff) (seq pub))
+           (map #(bit-and % 0xff) (seq (eth/ecrecover-pubkey digest sig))))
+        "recovers exactly the key that signed")
+    (testing "and ecrecover is still that key, keccaked to its last 20 bytes"
+      (is (= (map #(bit-and % 0xff) (seq (eth/ecrecover digest sig)))
+             (map #(bit-and % 0xff) (drop 12 (seq (eth/keccak256 pub)))))))
+    (testing "a different digest recovers a different key"
+      (is (not= (map #(bit-and % 0xff) (seq pub))
+                (map #(bit-and % 0xff)
+                     (seq (eth/ecrecover-pubkey
+                           (eth/keccak256 (eth/utf8 "filecoin!")) sig))))))))

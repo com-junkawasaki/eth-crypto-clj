@@ -144,9 +144,12 @@
 
 ;; ─── recovery ────────────────────────────────────────────────────────────
 
-(defn ecrecover
-  "Recover the signer's 20 address bytes from a 32-byte `digest` and a 65-byte
-  `sig` (r‖s‖v), v ∈ {27,28} or {0,1}."
+(defn ecrecover-pubkey
+  "Recover the signer's 64-byte uncompressed public key X‖Y (no 0x04 prefix)
+  from a 32-byte `digest` and a 65-byte `sig` (r‖s‖v).
+
+  Ethereum keccaks this and keeps 20 bytes; a Filecoin f1 address is
+  BLAKE2b-160 of 0x04 ‖ this. Recovery and address derivation are separate."
   [digest sig]
   (let [sig (vec (map #(bit-and % 0xff) (seq sig)))
         r (bytes->big (subvec sig 0 32))
@@ -160,9 +163,14 @@
         sR (pt-mul s R)
         eG (pt-mul e G)
         neg-eG [(first eG) (mod (- (second eG)) P)]
-        [qx qy] (pt-mul r-inv (pt-add sR neg-eG))
-        pub (into (big->bytes32 qx) (big->bytes32 qy))]
-    (vec (drop 12 (keccak/keccak256 pub)))))
+        [qx qy] (pt-mul r-inv (pt-add sR neg-eG))]
+    (into (big->bytes32 qx) (big->bytes32 qy))))
+
+(defn ecrecover
+  "Recover the signer's 20 address bytes from a 32-byte `digest` and a 65-byte
+  `sig` (r‖s‖v), v ∈ {27,28} or {0,1}."
+  [digest sig]
+  (vec (drop 12 (keccak/keccak256 (ecrecover-pubkey digest sig)))))
 
 ;; ─── RFC 6979 deterministic signing + EIP-2 low-s ────────────────────────
 
