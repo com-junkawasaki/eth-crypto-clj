@@ -68,6 +68,8 @@ controls; **not** suitable for a shared process signing on behalf of others.
 | `private->public` | 32-byte privkey → 64-byte uncompressed pubkey (`X‖Y`, no `0x04`) |
 | `address-of-privkey` | 32-byte privkey → EIP-55 `0x…` address |
 | `secp256k1-sign` | `(privkey digest)` → `{:r :s :recovery-id}` — deterministic ECDSA (**RFC 6979** HMAC-SHA256 nonce) with EIP-2 low-s |
+| `secp256k1-verify` | `(digest {:r :s} SEC-pubkey)` → boolean — ECDSA verification for compressed and uncompressed public keys |
+| `secp256k1-low-s?` | `s` scalar → boolean; protocol-specific DER/low-S policy stays separate from curve verification |
 | `rlp-encode` | byte-string / nested list → canonical Ethereum **RLP** bytes |
 | `sign-tx-legacy` | `(tx privkey)` → `0x…` raw signed **EIP-155** legacy tx (replaces python `eth_account`) |
 | `eip1559-digest` | `(tx)` → 32-byte `keccak256(0x02 ‖ rlp(payload))` — the digest to hand an out-of-process signer |

@@ -387,6 +387,7 @@
   (BigInteger. "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F" 16))
 (def ^:private ^BigInteger SECP-N
   (BigInteger. "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141" 16))
+(def ^:private ^BigInteger SECP-N-HALF (.shiftRight SECP-N 1))
 (def ^:private ^BigInteger SECP-B (BigInteger/valueOf 7))
 (def ^:private ^BigInteger SECP-GX
   (BigInteger. "79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798" 16))
@@ -491,6 +492,75 @@
     (System/arraycopy (uint->32 qy) 0 pub 32 32)
     pub))
 
+(defn- valid-secp256k1-point? [[x y]]
+  (and x y
+       (pos? (.signum ^BigInteger x))
+       (pos? (.signum ^BigInteger y))
+       (< (.compareTo ^BigInteger x SECP-P) 0)
+       (< (.compareTo ^BigInteger y SECP-P) 0)
+       (= (.mod (.multiply ^BigInteger y y) SECP-P)
+          (.mod (.add (.modPow ^BigInteger x
+                               (BigInteger/valueOf 3) SECP-P)
+                      SECP-B)
+                SECP-P))))
+
+(defn- decode-secp256k1-public-key [pubkey]
+  (try
+    (let [length (alength ^bytes pubkey)
+          prefix (when (pos? length) (bit-and (aget ^bytes pubkey 0) 0xff))
+          point
+          (cond
+            (and (= length 33) (contains? #{2 3} prefix))
+            (let [x (BigInteger. 1
+                                 (java.util.Arrays/copyOfRange
+                                  ^bytes pubkey 1 33))]
+              (when (< (.compareTo x SECP-P) 0)
+                (decompress x (= prefix 3))))
+
+            (and (= length 65) (= prefix 4))
+            [(BigInteger. 1
+                          (java.util.Arrays/copyOfRange ^bytes pubkey 1 33))
+             (BigInteger. 1
+                          (java.util.Arrays/copyOfRange ^bytes pubkey 33 65))]
+
+            :else nil)]
+      (when (and point (valid-secp256k1-point? point)) point))
+    (catch Exception _ nil)))
+
+(defn secp256k1-low-s?
+  "Whether an ECDSA `s` scalar is in Bitcoin/Ethereum's lower half order."
+  [s]
+  (let [s (if (instance? BigInteger s) s (biginteger s))]
+    (and (pos? (.signum ^BigInteger s))
+         (<= (.compareTo ^BigInteger s SECP-N-HALF) 0))))
+
+(defn secp256k1-verify
+  "Verify an ECDSA signature map `{:r :s}` over a 32-byte digest.
+
+  Accepts SEC compressed (33-byte) and uncompressed (65-byte, 0x04-prefixed)
+  public keys. Encoding policy such as strict DER or low-S belongs to the
+  calling protocol and is intentionally separate from curve verification."
+  [^bytes digest {:keys [r s]} ^bytes pubkey]
+  (try
+    (boolean
+     (let [r (if (instance? BigInteger r) r (biginteger r))
+           s (if (instance? BigInteger s) s (biginteger s))
+           q (decode-secp256k1-public-key pubkey)]
+       (and (= 32 (alength digest))
+            q
+            (pos? (.signum ^BigInteger r))
+            (pos? (.signum ^BigInteger s))
+            (< (.compareTo ^BigInteger r SECP-N) 0)
+            (< (.compareTo ^BigInteger s SECP-N) 0)
+            (let [z (BigInteger. 1 digest)
+                  w (.modInverse ^BigInteger s SECP-N)
+                  u1 (.mod (.multiply z w) SECP-N)
+                  u2 (.mod (.multiply ^BigInteger r w) SECP-N)
+                  result (pt-add (pt-mul u1 G) (pt-mul u2 q))]
+              (and result
+                   (= r (.mod ^BigInteger (first result) SECP-N)))))))
+    (catch Exception _ false)))
+
 (defn address-of-privkey
   "EIP-55 checksummed 0x… address controlled by a 32-byte private key:
   last 20 bytes of keccak256(uncompressed-pubkey-without-04-prefix)."
@@ -504,8 +574,6 @@
   (let [mac (javax.crypto.Mac/getInstance "HmacSHA256")]
     (.init mac (javax.crypto.spec.SecretKeySpec. key "HmacSHA256"))
     (.doFinal mac data)))
-
-(def ^:private ^BigInteger SECP-N-HALF (.shiftRight SECP-N 1))
 
 (defn secp256k1-sign
   "Deterministic ECDSA signature over secp256k1 of a 32-byte `digest` with a
@@ -777,6 +845,9 @@
   (defn ecrecover [digest sig] (secp/ecrecover digest sig))
   (defn ecrecover-checksum [digest sig] (eip55-checksum (secp/ecrecover digest sig)))
   (defn private->public [privkey] (secp/private->public privkey))
+  (defn secp256k1-low-s? [s] (secp/low-s? s))
+  (defn secp256k1-verify [digest signature pubkey]
+    (secp/verify digest signature pubkey))
   (defn address-of-privkey [privkey] (eip55-checksum (secp/address-bytes privkey)))
   (defn secp256k1-sign [privkey digest] (secp/sign privkey digest))
   (defn rlp-encode [item] (vec (js-core/rlp-encode item)))
