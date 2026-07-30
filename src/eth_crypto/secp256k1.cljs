@@ -137,6 +137,51 @@
         [qx qy] (pt-mul d G)]
     (into (big->bytes32 qx) (big->bytes32 qy))))
 
+(defn- valid-point? [[x y]]
+  (and x y (> x ZERO) (> y ZERO) (< x P) (< y P)
+       (= (mod (* y y) P)
+          (mod (+ (mod-pow x THREE P) B) P))))
+
+(defn- decode-public-key [pubkey]
+  (try
+    (let [pubkey (vec (map #(bit-and % 0xff) pubkey))
+          prefix (first pubkey)
+          point
+          (cond
+            (and (= 33 (count pubkey)) (contains? #{2 3} prefix))
+            (let [x (bytes->big (subvec pubkey 1 33))]
+              (when (< x P) (decompress x (= prefix 3))))
+
+            (and (= 65 (count pubkey)) (= 4 prefix))
+            [(bytes->big (subvec pubkey 1 33))
+             (bytes->big (subvec pubkey 33 65))]
+
+            :else nil)]
+      (when (and point (valid-point? point)) point))
+    (catch :default _ nil)))
+
+(defn low-s?
+  "Whether an ECDSA s scalar is in the lower half curve order."
+  [s]
+  (and (> s ZERO) (<= s N-HALF)))
+
+(defn verify
+  "ECDSA verification over a 32-byte digest and SEC compressed/uncompressed
+  public key. Strict DER and low-S are calling-protocol policy."
+  [digest {:keys [r s]} pubkey]
+  (try
+    (boolean
+     (let [q (decode-public-key pubkey)]
+       (and (= 32 (count digest))
+            q (> r ZERO) (> s ZERO) (< r N) (< s N)
+            (let [z (bytes->big digest)
+                  w (mod-inverse s N)
+                  u1 (mod (* z w) N)
+                  u2 (mod (* r w) N)
+                  result (pt-add (pt-mul u1 G) (pt-mul u2 q))]
+              (and result (= r (mod (first result) N)))))))
+    (catch :default _ false)))
+
 (defn address-bytes
   "Last 20 bytes of keccak256(uncompressed public key) — the raw address."
   [privkey]
