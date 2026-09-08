@@ -86,7 +86,7 @@
     eip1559-raw         tx + {:r :s :recovery-id} -> 0x… raw signed type-2 tx
     sign-tx-eip1559     tx + privkey -> 0x… raw signed EIP-1559 (type-2) transaction
     raw-tx-hash         raw signed tx (hex/bytes) -> 0x… tx hash, pre-broadcast"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             ;; cljs-only: the three namespaces that close the gaps which made
             ;; this file's crypto half :clj-only (BigInt Keccak lanes, pure-cljs
             ;; HMAC-SHA256 for RFC 6979, and modInverse/modPow for secp256k1).
